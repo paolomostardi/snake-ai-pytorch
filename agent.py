@@ -1,10 +1,15 @@
+import pygame
 import torch
 import random
 import numpy as np
+import threading
+import queue
+
 from collections import deque
-from game import SnakeGameAI, Direction, Point
+from game import SnakeGameLogic,SnakeGameAI, Direction, Point, SnakeGUI, render_training_UI
 from model import Linear_QNet, QTrainer
 from helper import plot
+
 
 MAX_MEMORY = 100_000
 BATCH_SIZE = 1000
@@ -17,60 +22,30 @@ class Agent:
         self.epsilon = 0 # randomness
         self.gamma = 0.9 # discount rate
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
-        self.model = Linear_QNet(11, 256, 3)
+        self.model = Linear_QNet(12, 256, 3)
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
-
 
     def get_state(self, game):
         head = game.snake[0]
-        point_l = Point(head.x - 20, head.y)
-        point_r = Point(head.x + 20, head.y)
-        point_u = Point(head.x, head.y - 20)
-        point_d = Point(head.x, head.y + 20)
+        point_l = Point(head.x - 1, head.y)
+        point_r = Point(head.x + 1, head.y)
+        point_u = Point(head.x, head.y - 1)
+        point_d = Point(head.x, head.y + 1)
         
         dir_l = game.direction == Direction.LEFT
         dir_r = game.direction == Direction.RIGHT
         dir_u = game.direction == Direction.UP
         dir_d = game.direction == Direction.DOWN
 
-        state = [
-            # Danger straight
-            (dir_r and game.is_collision(point_r)) or 
-            (dir_l and game.is_collision(point_l)) or 
-            (dir_u and game.is_collision(point_u)) or 
-            (dir_d and game.is_collision(point_d)),
+        
 
-            # Danger right
-            (dir_u and game.is_collision(point_r)) or 
-            (dir_d and game.is_collision(point_l)) or 
-            (dir_l and game.is_collision(point_u)) or 
-            (dir_r and game.is_collision(point_d)),
-
-            # Danger left
-            (dir_d and game.is_collision(point_r)) or 
-            (dir_u and game.is_collision(point_l)) or 
-            (dir_r and game.is_collision(point_u)) or 
-            (dir_l and game.is_collision(point_d)),
-            
-            # Move direction
-            dir_l,
-            dir_r,
-            dir_u,
-            dir_d,
-            
-            # Food location 
-            game.food.x < game.head.x,  # food left
-            game.food.x > game.head.x,  # food right
-            game.food.y < game.head.y,  # food up
-            game.food.y > game.head.y  # food down
-            ]
 
         return np.array(state, dtype=int)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done)) # popleft if MAX_MEMORY is reached
 
-    def train_long_memory(self):
+    def train_long_memory(self): # trains at the end of the game
         if len(self.memory) > BATCH_SIZE:
             mini_sample = random.sample(self.memory, BATCH_SIZE) # list of tuples
         else:
@@ -99,6 +74,17 @@ class Agent:
 
         return final_move
 
+result_queue = queue.Queue()
+
+
+
+def run_training_ui():
+
+    while True : 
+        quit, render_GUI = render_training_UI()
+        if render_GUI:
+            result_queue.put((quit, render_GUI))
+            break
 
 def train():
     plot_scores = []
@@ -106,7 +92,12 @@ def train():
     total_score = 0
     record = 0
     agent = Agent()
-    game = SnakeGameAI()
+    game = SnakeGameLogic()
+    graphic = SnakeGUI()
+    quit, render_GUI = False, True
+    pygame.init()
+
+
     while True:
         # get old state
         state_old = agent.get_state(game)
@@ -116,7 +107,14 @@ def train():
 
         # perform move and get new state
         reward, done, score = game.play_step(final_move)
+        if render_GUI:
+            quit, render_GUI = graphic.render_game_UI(game)
+        else:
+            quit, render_GUI = graphic.render_training_UI()
+
+
         state_new = agent.get_state(game)
+
 
         # train short memory
         agent.train_short_memory(state_old, final_move, reward, state_new, done)
